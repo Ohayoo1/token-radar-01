@@ -1,239 +1,111 @@
-// The radar's page. One data object (window.RADAR, written by main.ts), no network, no framework:
-// a filterable board, a detail drawer with the arithmetic and the farm plan, the live-token evidence
-// behind the multiples, and the method the numbers come from.
-
-const R = window.RADAR;
-
-/* ---------- formatting ---------- */
-const money = (n) => {
-  if (!Number.isFinite(n)) return '—';
-  const a = Math.abs(n);
-  if (a >= 1e12) return `$${(n / 1e12).toFixed(2)}T`;
-  if (a >= 1e9) return `$${(n / 1e9).toFixed(2)}B`;
-  if (a >= 1e6) return `$${(n / 1e6).toFixed(a >= 1e8 ? 0 : 1)}M`;
-  if (a >= 1e3) return `$${Math.round(n / 1e3)}K`;
-  return `$${Math.round(n)}`;
-};
-const pct = (n) => (n === null || !Number.isFinite(n) ? '—' : `${n > 0 ? '+' : ''}${n.toFixed(1)}%`);
-const mult = (n) => (n >= 1 ? `${n.toFixed(2)}×` : `${n.toFixed(3)}×`);
-const age = (d) => (d === null ? 'unrecorded' : d >= 730 ? `${(d / 365).toFixed(1)} yr` : `${d.toLocaleString('en-US')} d`);
-const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-
-/* ---------- chrome ---------- */
-const $ = (id) => document.getElementById(id);
-document.title = `Token Launch Radar — ${R.board_size} protocols, ranked by implied value`;
-
-const fetched = (R.source.match(/fetched\s+([^\n]+)$/) ?? [])[1] ?? '';
-$('snapshot-meta').innerHTML =
-  `snapshot <b>${esc(R.as_of)}</b> · floor <b>${money(R.floor_usd)}</b><br>DefiLlama · fetched ${esc(fetched.replace(/\.\d+Z$/, 'Z'))}`;
-$('model-chip').textContent = R.model_version;
-$('lede').textContent =
-  `${R.universe_size.toLocaleString('en-US')} protocols in the snapshot, ${R.live_tokens} with a token that already trades. ` +
-  `The board prices the other ${R.board_size} — every one of the ${R.watchlist_size} on the watchlist and ${R.early_size} below its floor — ` +
-  `off the multiples the market itself pays in their category, and gives each a farm plan with what it costs and how long it takes.`;
-
-$('stats').innerHTML = [
-  ['On the watchlist', R.watchlist_size, 'no token recorded'],
-  ['Rows on the board', R.board_size, `${R.early_size} below the floor`],
-  ['Live-token comparators', R.global_sample, 'used to calibrate'],
-  ['Median MC / TVL', mult(R.global_median_multiple), 'the market\'s own price'],
-]
-  .map(([k, v, s]) => `<div class="stat"><dt>${k}</dt><dd>${v}<small>${s}</small></dd></div>`)
-  .join('');
-$('foot-left').textContent = `Token Launch Radar · ${R.model_version} · snapshot ${R.as_of}`;
-
-/* ---------- state ---------- */
-const state = { q: '', category: '', chain: '', sort: 'implied', watch: false, open: null };
-
-const categories = [...new Set(R.rows.map((r) => r.category).filter(Boolean))].sort((a, b) => (a < b ? -1 : 1));
-const chains = [...new Set(R.rows.flatMap((r) => r.chains))].sort((a, b) => (a < b ? -1 : 1));
-$('f-category').insertAdjacentHTML('beforeend', categories.map((c) => `<option value="${esc(c)}">${esc(c)}</option>`).join(''));
-$('f-chain').insertAdjacentHTML('beforeend', chains.map((c) => `<option value="${esc(c)}">${esc(c)}</option>`).join(''));
-
-/* ---------- the board ---------- */
-function filtered() {
-  const q = state.q.trim().toLowerCase();
-  let rows = R.rows.filter((r) => {
-    if (state.watch && !r.on_watchlist) return false;
-    if (state.category && r.category !== state.category) return false;
-    if (state.chain && !r.chains.includes(state.chain)) return false;
-    if (!q) return true;
-    return (
-      r.name.toLowerCase().includes(q) ||
-      r.slug.includes(q) ||
-      (r.category ?? '').toLowerCase().includes(q) ||
-      r.chains.join(' ').toLowerCase().includes(q)
-    );
+(() => {
+  'use strict';
+  const radar = window.RADAR;
+  const byId = (id) => document.getElementById(id);
+  const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
+  const money = (value) => {
+    if (!Number.isFinite(value)) return '—';
+    const unit = [[1e12, 'T'], [1e9, 'B'], [1e6, 'M'], [1e3, 'K']].find(([scale]) => Math.abs(value) >= scale);
+    return `$${Number((value / (unit?.[0] ?? 1)).toFixed(unit?.[1] === 'B' ? 2 : 1))}${unit?.[1] ?? ''}`;
+  };
+  const pct = (value) => Number.isFinite(value) ? `${value >= 0 ? '+' : ''}${value.toFixed(1)}%` : '—';
+  const days = (value) => Number.isFinite(value) ? value >= 365 ? `${(value / 365).toFixed(1)}y` : `${Math.round(value)}d` : 'unrecorded';
+  const mult = (value) => Number.isFinite(value) ? `${value.toFixed(3)}×` : '—';
+  const text = (id, value) => { byId(id).textContent = value; };
+  const model = radar.model;
+  const settings = {
+    samples: model.samples_needed ?? model.cat_min_samples,
+    low: model.clamp_low ?? model.mult_floor, high: model.clamp_high ?? model.mult_cap,
+    step: model.breadth_step ?? model.chain_weight, cap: model.breadth_cap ?? model.chain_cap,
+    maturityRange: model.maturity_range ?? (1 - model.maturity_floor),
+  };
+  const source = String(radar.source ?? '').replace(/(?:https?:\/\/|www\.)\S+/gi, '').replace(/\s+/g, ' ').trim();
+  text('model-version', radar.model_version);
+  text('snap-line', `snapshot ${radar.as_of} · floor ${money(radar.floor_usd)}${source ? ` · ${source}` : ''}`);
+  text('lede', `${radar.universe_size} protocols in the universe; ${radar.global_sample} live-token protocols calibrated the board. The board prices ${radar.board_size} rows, and every row carries a farm plan with cost and time.`);
+  for (const [key, value, note] of [
+    ['watch', radar.watchlist_size, 'no token recorded'], ['rows', radar.board_size, `${radar.early_size} below the floor`],
+    ['live', radar.global_sample, 'used to calibrate'], ['mult', mult(radar.global_median_multiple), 'median market cap / TVL'],
+  ]) { text(`stat-${key}`, value); text(`stat-${key}-n`, note); }
+  text('foot-line', `Token Launch Radar · ${radar.model_version} · snapshot ${radar.as_of} · Estimates, not a token launch forecast or investment advice.`);
+  const defaults = { q: '', category: '', chain: '', sort: 'implied', watch: false };
+  const state = { ...defaults, open: null };
+  const sorts = { implied: ['Implied value', 'implied_value_usd'], tvl: ['TVL', 'tvl_usd'], growth: ['7-day growth', 'change_7d'], age: ['Age', 'age_days'] };
+  for (const [id, values] of [['f-category', radar.rows.map((row) => row.category).filter(Boolean)], ['f-chain', radar.rows.flatMap((row) => row.chains)]]) {
+    for (const value of [...new Set(values)].sort((left, right) => left.localeCompare(right))) byId(id).add(new Option(value, value));
+  }
+  const metadata = (row) => `${row.category ?? 'Uncategorised'} · ${row.chains.slice(0, 3).join(', ')}${row.chains.length > 3 ? ` +${row.chains.length - 3}` : ''}`;
+  function render() {
+    const query = state.q.trim().toLowerCase();
+    const rows = radar.rows.filter((row) => (!state.watch || row.on_watchlist) && (!state.category || row.category === state.category) && (!state.chain || row.chains.includes(state.chain)) && [row.name, row.slug, row.category, ...row.chains].join(' ').toLowerCase().includes(query));
+    const [label, key] = sorts[state.sort];
+    rows.sort((left, right) => (right[key] ?? -Infinity) - (left[key] ?? -Infinity) || left.rank - right.rank);
+    const largest = Math.max(1, ...rows.map((row) => row.implied_value_usd));
+    byId('rows').innerHTML = rows.map((row) => `<li class="row${state.open === row.slug ? ' is-open' : ''}" tabindex="0" role="button" data-slug="${esc(row.slug)}" aria-haspopup="dialog">
+      <span class="c-rank">${row.rank}</span><span class="c-name"><b class="p-name">${esc(row.name)}</b>${row.on_watchlist ? ' <em class="tag flag">watchlist</em>' : ''}<small class="p-meta" style="display:block">${esc(metadata(row))}</small></span>
+      <span class="c-num c-tvl tvl-col">${money(row.tvl_usd)}</span><span class="c-num c-chg growth-col ${row.change_7d == null ? 'faint' : row.change_7d >= 0 ? 'up pos' : 'down neg'}">${pct(row.change_7d)}</span>
+      <span class="c-num c-age age-col">${days(row.age_days)}</span><span class="c-num c-mult mult-col">${mult(row.multiple)}</span>
+      <span class="c-val value"><b>${money(row.implied_value_usd)}</b><span class="bar" style="width:${100 * row.implied_value_usd / largest}%"><i style="width:100%"></i></span><span class="band" style="display:block">${money(row.implied_low_usd)}–${money(row.implied_high_usd)}</span></span></li>`).join('');
+    text('count', `${rows.length} of ${radar.rows.length} rows · sorted by ${label}`);
+    byId('empty').hidden = rows.length !== 0;
+  }
+  let previousFocus = null;
+  function open(slug) {
+    const row = radar.rows.find((item) => item.slug === slug);
+    if (!row) return;
+    if (byId('drawer').hidden) previousFocus = document.activeElement;
+    state.open = slug;
+    const growth = 1 + row.growth_pct / 100 * model.growth_weight;
+    const maturity = model.maturity_floor + Math.min(row.age_days ?? model.unknown_age_days ?? 365, model.maturity_days) / model.maturity_days * settings.maturityRange;
+    const breadth = 1 + settings.step * Math.min(Math.max(row.chains.length - 1, 0), settings.cap);
+    const record = [['TVL', money(row.tvl_usd)], ['7-day', pct(row.change_7d)], ['Category', row.category ?? 'Uncategorised'], ['Chains', row.chains.join(', ')], ['Listed at', row.listed_at ?? 'unrecorded'], ['Age', days(row.age_days)], ['No token for', days(row.age_days)]];
+    byId('d-body').innerHTML = `<p class="eyebrow">Rank #${row.rank} · ${esc(row.slug)}</p><h2 id="d-name">${esc(row.name)}</h2><div class="big-value">${money(row.implied_value_usd)}</div><p class="band">${money(row.implied_low_usd)}–${money(row.implied_high_usd)}</p><p class="note">${esc(row.confidence)} confidence · ${row.category_sample} calibration samples</p>
+      <h3>The record</h3><dl class="facts">${record.map(([label, value]) => `<dt>${label}</dt><dd>${esc(value)}</dd>`).join('')}</dl>
+      <h3>The arithmetic</h3><div class="formula">${[
+        ['Base', `${money(row.tvl_usd)} × category multiple ${mult(row.multiple)} = ${money(row.tvl_usd * row.multiple)}`],
+        ['Growth', `${pct(row.growth_pct)} × weight ${model.growth_weight}: ${mult(growth)}`],
+        ['Maturity', mult(maturity)], ['Breadth', mult(breadth)], ['Implied', `${money(row.tvl_usd * row.multiple)} × ${mult(growth)} × ${mult(maturity)} × ${mult(breadth)} = ${money(row.implied_value_usd)}`],
+      ].map(([label, value]) => `<div class="formula-line"><span class="k">${label}</span><span class="eq">=</span><span class="v">${esc(value)}</span></div>`).join('')}</div>
+      <h3>Farm plan</h3><ol class="steps">${row.farm.map((step) => `<li>${esc(step.action)}<span class="cost"><b>Cost:</b> ${esc(step.cost)} · <b>Time:</b> ${esc(step.time)}</span></li>`).join('')}</ol>`;
+    render();
+    byId('drawer').hidden = false;
+    byId('drawer').setAttribute('aria-hidden', 'false');
+    byId('drawer-close').focus();
+  }
+  function close() {
+    if (byId('drawer').hidden) return;
+    const slug = state.open;
+    state.open = null;
+    byId('drawer').hidden = true;
+    byId('drawer').setAttribute('aria-hidden', 'true');
+    render();
+    const row = [...byId('rows').children].find((item) => item.dataset.slug === slug);
+    (previousFocus?.isConnected ? previousFocus : row)?.focus();
+  }
+  function filter(values = {}) {
+    for (const key of Object.keys(defaults)) if (Object.hasOwn(values, key)) state[key] = key === 'watch' ? Boolean(values[key]) : String(values[key] ?? '');
+    if (!Object.hasOwn(sorts, state.sort)) state.sort = defaults.sort;
+    for (const [key, id] of [['q', 'q'], ['category', 'f-category'], ['chain', 'f-chain'], ['sort', 'f-sort']]) byId(id).value = state[key];
+    byId('f-watch').checked = state.watch;
+    render();
+  }
+  byId('rows').addEventListener('click', (event) => { const row = event.target.closest('[data-slug]'); if (row) open(row.dataset.slug); });
+  byId('rows').addEventListener('keydown', (event) => { if (event.key === 'Enter' || event.key === ' ') { const row = event.target.closest('[data-slug]'); if (row) { event.preventDefault(); open(row.dataset.slug); } } });
+  byId('drawer-close').addEventListener('click', close);
+  document.addEventListener('keydown', (event) => { if (event.key === 'Escape') close(); });
+  document.addEventListener('click', (event) => { if (!byId('drawer').contains(event.target) && !event.target.closest('#rows [data-slug]')) close(); });
+  byId('q').addEventListener('input', () => filter({ q: byId('q').value }));
+  for (const [key, id] of [['category', 'f-category'], ['chain', 'f-chain'], ['sort', 'f-sort']]) byId(id).addEventListener('change', () => filter({ [key]: byId(id).value }));
+  byId('f-watch').addEventListener('change', () => filter({ watch: byId('f-watch').checked }));
+  byId('reset').addEventListener('click', () => filter(defaults));
+  for (const tab of document.querySelectorAll('[data-view]')) tab.addEventListener('click', () => {
+    close();
+    for (const button of document.querySelectorAll('[data-view]')) { const selected = button === tab; button.setAttribute('aria-selected', String(selected)); byId(`view-${button.dataset.view}`).hidden = !selected; }
   });
-  const key = {
-    implied: (a, b) => b.implied_value_usd - a.implied_value_usd,
-    tvl: (a, b) => b.tvl_usd - a.tvl_usd,
-    growth: (a, b) => (b.change_7d ?? -999) - (a.change_7d ?? -999),
-    age: (a, b) => (b.age_days ?? -1) - (a.age_days ?? -1),
-    name: (a, b) => a.name.localeCompare(b.name),
-  }[state.sort];
-  return rows.sort(key);
-}
-
-function render() {
-  const rows = filtered();
-  const top = Math.max(...rows.map((r) => r.implied_value_usd), 1);
-  $('rows').innerHTML = rows
-    .map((r) => {
-      const w = Math.max(1, Math.round((r.implied_value_usd / top) * 100));
-      const g = r.change_7d === null ? 'c-num growth-col faint' : r.change_7d >= 0 ? 'c-num growth-col pos' : 'c-num growth-col neg';
-      return `<li><button class="row${state.open === r.slug ? ' is-open' : ''}" data-slug="${esc(r.slug)}" type="button">
-        <span class="c-rank">${r.rank}</span>
-        <span class="c-name">
-          <span class="p-name">${esc(r.name)}${r.on_watchlist ? '<span class="flag">watchlist</span>' : '<span class="flag early">early</span>'}</span>
-          <span class="p-meta">${esc(r.category ?? 'uncategorised')} · ${esc(r.chains.slice(0, 3).join(', '))}${r.chains.length > 3 ? ` +${r.chains.length - 3}` : ''}</span>
-        </span>
-        <span class="c-num tvl-col">${money(r.tvl_usd)}</span>
-        <span class="${g}">${pct(r.change_7d)}</span>
-        <span class="c-num age-col faint">${age(r.age_days)}</span>
-        <span class="c-num mult-col faint">${mult(r.multiple)}</span>
-        <span class="value">
-          <b>${money(r.implied_value_usd)}</b>
-          <span class="bar"><i style="width:${w}%"></i></span>
-          <span class="band">${money(r.implied_low_usd)} – ${money(r.implied_high_usd)}</span>
-        </span>
-      </button></li>`;
-    })
-    .join('');
-  $('empty').hidden = rows.length > 0;
-  $('count').textContent = `${rows.length} of ${R.board_size} rows · sorted by ${$('f-sort').selectedOptions[0].textContent.toLowerCase()}`;
-}
-
-/* ---------- the detail drawer ---------- */
-function drawer(r) {
-  const p = [
-    ['TVL', money(r.tvl_usd)],
-    ['7-day change', pct(r.change_7d)],
-    ['Category', r.category ?? 'uncategorised'],
-    ['Chains', r.chains.slice(0, 6).join(', ') + (r.chains.length > 6 ? ` +${r.chains.length - 6}` : '') || '—'],
-    ['Recorded since', r.listed_at ?? 'unrecorded'],
-    ['No token for', age(r.age_days)],
-  ];
-  $('drawer-in').innerHTML = `
-    <button class="drawer-close" type="button" aria-label="Close">×</button>
-    <div class="d-eyebrow">Rank ${r.rank} of ${R.board_size} · ${r.on_watchlist ? 'on the watchlist' : 'early, below the floor'}</div>
-    <h2 class="d-title">${esc(r.name)}</h2>
-    <div class="d-sub">${esc(r.category ?? 'uncategorised')} · ${esc(r.chains.slice(0, 6).join(' · ') || 'chains unrecorded')}${r.chains.length > 6 ? ` +${r.chains.length - 6}` : ''}</div>
-    <div class="d-value">${money(r.implied_value_usd)}</div>
-    <div class="d-band">implied value · likely ${money(r.implied_low_usd)} to ${money(r.implied_high_usd)}<br>${r.confidence} confidence · ${r.category_sample} ${esc(r.category_basis)}</div>
-
-    <div class="d-block">
-      <h3>The record</h3>
-      <dl class="d-grid">${p.map(([k, v]) => `<dt>${k}</dt><dd>${esc(v)}</dd>`).join('')}</dl>
-    </div>
-
-    <div class="d-block">
-      <h3>The arithmetic</h3>
-      <dl class="d-grid">
-        <dt>TVL × category multiple</dt><dd><b>${money(r.tvl_usd)}</b> × <b>${mult(r.multiple)}</b></dd>
-        <dt>7-day growth, damped</dt><dd><b>${pct(r.growth_pct)}</b> → ${(1 + (r.growth_pct / 100) * R.model.growth_weight).toFixed(3)}×</dd>
-        <dt>Maturity</dt><dd>${age(r.age_days)} → ${(R.model.maturity_floor + (Math.min(Math.max(r.age_days ?? R.model.unknown_age_days, 0), R.model.maturity_days) / R.model.maturity_days) * R.model.maturity_range).toFixed(3)}×</dd>
-        <dt>Chain breadth</dt><dd>${r.chains.length} chain${r.chains.length === 1 ? '' : 's'} → ${(1 + R.model.chain_weight * Math.min(Math.max(r.chains.length - 1, 0), R.model.chain_cap)).toFixed(3)}×</dd>
-        <dt>Implied value</dt><dd><b>${money(r.implied_value_usd)}</b></dd>
-      </dl>
-    </div>
-
-    <div class="d-block">
-      <h3>How to farm it</h3>
-      <ol class="steps">${r.farm
-        .map((s) => `<li>${esc(s.action)}<span class="cost"><b>Cost</b> ${esc(s.cost)} · <b>Time</b> ${esc(s.time)}</span></li>`)
-        .join('')}</ol>
-    </div>`;
-  $('drawer').hidden = false;
-  $('drawer-in').querySelector('.drawer-close').addEventListener('click', close);
-  $('drawer').scrollTop = 0;
-}
-function open(slug) {
-  const r = R.rows.find((x) => x.slug === slug);
-  if (!r) return;
-  state.open = slug;
+  byId('live').innerHTML = radar.live.map((row) => `<li class="row live"><span class="c-name"><b class="p-name">${esc(row.name)}</b><small class="p-meta" style="display:block">${esc(row.category ?? 'Uncategorised')}</small></span><span class="c-num" aria-label="TVL">${money(row.tvl_usd)}</span><span class="c-num" aria-label="Market cap">${money(row.mcap_usd)}</span><span class="c-num" aria-label="Multiple">${mult(row.multiple)}</span><span class="c-num" aria-label="Age">${days(row.age_days)}</span></li>`).join('');
+  byId('method-body').innerHTML = `<div class="formula"><div class="formula-line strong"><span class="k">Implied</span><span class="eq">=</span><span class="v">TVL × category multiple × growth × maturity × breadth</span></div></div><p class="note">Live-token market cap / TVL provides category medians and quartiles. Categories need ${esc(settings.samples)} samples; thinner categories use the global median, ${mult(radar.global_median_multiple)}, from ${radar.global_sample} samples. Multiples are clamped to ${mult(settings.low)}–${mult(settings.high)}.${model.category_weight != null ? ` Category weight is ${esc(model.category_weight)}.` : ''}</p>
+    <ul class="limits"><li>Growth = 1 + growth percentage / 100 × ${esc(model.growth_weight)}.${model.growth_floor != null ? ` Weekly growth is clamped to ${pct(model.growth_floor)}–${pct(model.growth_cap)}.` : ''}</li><li>Maturity = ${esc(model.maturity_floor)} + min(age, ${esc(model.maturity_days)}) / ${esc(model.maturity_days)} × ${esc(settings.maturityRange)}. Missing listing dates use ${esc(model.unknown_age_days ?? 365)} days.</li><li>Breadth = 1 + ${esc(settings.step)} × min(extra chains, ${esc(settings.cap)}).</li><li>The low–high band uses category quartiles with the same adjustments. Estimates hold today's record fixed; they do not predict token issuance, supply or a launch price.</li></ul><h3>Category calibration</h3>`;
+  byId('category-table').innerHTML = `<caption>Live-token category multiples</caption><thead><tr><th scope="col">Category</th><th scope="col">Samples</th><th scope="col">Median</th><th scope="col">25th percentile</th><th scope="col">75th percentile</th></tr></thead><tbody>${radar.categories.map((category) => `<tr><th scope="row">${esc(category.category)}</th><td>${category.sample}</td><td>${mult(category.median_multiple)}</td><td>${mult(category.p25_multiple)}</td><td>${mult(category.p75_multiple)}</td></tr>`).join('')}</tbody>`;
+  window.RADAR_UI = { open, close, filter };
   render();
-  drawer(r);
-}
-function close() {
-  state.open = null;
-  $('drawer').hidden = true;
-  render();
-}
-
-/* ---------- the live-token evidence ---------- */
-const liveTop = Math.max(...R.live.map((l) => l.multiple), 1);
-$('live-rows').innerHTML = R.live
-  .map((l) => {
-    const g = l.change_7d === null ? 'c-num faint' : l.change_7d >= 0 ? 'c-num pos' : 'c-num neg';
-    return `<li><div class="row live">
-      <span class="c-name">
-        <span class="p-name">${esc(l.name)}</span>
-        <span class="p-meta">${esc(l.category ?? 'uncategorised')} · ${esc(l.symbol ?? 'no ticker')} · ${esc(l.chains.slice(0, 2).join(', '))}</span>
-      </span>
-      <span class="c-num">${money(l.tvl_usd)}</span>
-      <span class="c-num">${money(l.mcap_usd)}</span>
-      <span class="${g}">${pct(l.change_7d)}</span>
-      <span class="value"><b>${mult(l.multiple)}</b><span class="bar"><i style="width:${Math.max(2, Math.round((l.multiple / liveTop) * 100))}%"></i></span></span>
-    </div></li>`;
-  })
-  .join('');
-
-/* ---------- the method ---------- */
-const w = R.model;
-$('w-growth').textContent = w.growth_weight;
-$('w-matfloor').textContent = w.maturity_floor;
-$('w-matrange').textContent = w.maturity_range;
-$('w-matdays').textContent = w.maturity_days.toLocaleString('en-US');
-$('w-matdays2').textContent = w.maturity_days.toLocaleString('en-US');
-$('w-chain').textContent = w.chain_weight;
-$('w-chaincap').textContent = w.chain_cap;
-$('method-note').textContent =
-  `The multiple is the only input the snapshot does not give directly, so it is read from the snapshot's own live-token protocols: ` +
-  `${R.global_sample} of them record both a market cap and a TVL today, and their median is ${mult(R.global_median_multiple)}. ` +
-  `A category with at least ${w.cat_min_samples} of them uses its own median, clamped to ${mult(w.mult_floor)}–${mult(w.mult_cap)}; ` +
-  `anything thinner falls back to the whole live set. A protocol the snapshot gives no listing date is treated as ${w.unknown_age_days} days old.`;
-$('cat-rows').innerHTML = R.categories
-  .map((c) => `<li><div class="row cat">
-      <span class="c-name">${esc(c.category)}</span>
-      <span class="c-num">${c.sample}</span>
-      <span class="c-num faint">${mult(c.p25_multiple)}</span>
-      <span class="c-num"><b>${mult(c.median_multiple)}</b></span>
-      <span class="c-num faint">${mult(c.p75_multiple)}</span>
-    </div></li>`)
-  .join('');
-
-/* ---------- wiring ---------- */
-$('rows').addEventListener('click', (e) => {
-  const btn = e.target.closest('.row');
-  if (btn) open(btn.dataset.slug);
-});
-$('q').addEventListener('input', (e) => { state.q = e.target.value; render(); });
-$('f-category').addEventListener('change', (e) => { state.category = e.target.value; render(); });
-$('f-chain').addEventListener('change', (e) => { state.chain = e.target.value; render(); });
-$('f-sort').addEventListener('change', (e) => { state.sort = e.target.value; render(); });
-$('f-watch').addEventListener('change', (e) => { state.watch = e.target.checked; render(); });
-$('reset').addEventListener('click', () => {
-  state.q = ''; state.category = ''; state.chain = ''; state.sort = 'implied'; state.watch = false;
-  $('q').value = ''; $('f-category').value = ''; $('f-chain').value = ''; $('f-sort').value = 'implied'; $('f-watch').checked = false;
-  close(); render();
-});
-document.addEventListener('keydown', (e) => { if (e.key === 'Escape') close(); });
-$('tabs').addEventListener('click', (e) => {
-  const tab = e.target.closest('.tab');
-  if (!tab) return;
-  for (const t of document.querySelectorAll('.tab')) t.setAttribute('aria-selected', String(t === tab));
-  for (const v of ['board', 'live', 'method']) $(`view-${v}`).hidden = v !== tab.dataset.view;
-});
-
-render();
-window.RADAR_UI = { open, close, filter: (f) => { Object.assign(state, f); sync(); render(); } };
-
-/** Push the state's values back into the controls, so a filtered board and its controls agree. */
-function sync() {
-  $('q').value = state.q;
-  $('f-category').value = state.category;
-  $('f-chain').value = state.chain;
-  $('f-sort').value = state.sort;
-  $('f-watch').checked = state.watch;
-}
+})();

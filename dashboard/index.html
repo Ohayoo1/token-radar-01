@@ -1,146 +1,68 @@
 <!doctype html>
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Token Launch Radar — pre-token protocols ranked by implied value</title>
-<link rel="stylesheet" href="app.css">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Token Launch Radar</title>
+  <link rel="stylesheet" href="app.css">
+  <script src="../data.js" defer></script>
+  <script src="app.js" defer></script>
 </head>
 <body>
-<a class="skip" href="#board">Skip to the board</a>
-
-<header class="top">
-  <div class="wrap top-in">
-    <div class="brand">
-      <span class="mark" aria-hidden="true"></span>
-      <span class="brand-text">TOKEN LAUNCH RADAR</span>
-      <span class="chip" id="model-chip">radar-2</span>
+  <header class="top">
+    <div class="wrap top-in">
+      <div class="brand"><span class="mark" aria-hidden="true"></span><span class="brand-text">TOKEN LAUNCH RADAR</span></div>
+      <span class="chip"><span id="model-version"></span></span>
+      <div class="snap snapshot" id="snap-line"></div>
     </div>
-    <div class="snapshot" id="snapshot-meta"></div>
-  </div>
-</header>
-
-<section class="hero">
-  <div class="wrap">
-    <h1>What a protocol's token would be worth,<br><span class="dim">if its record stayed as it is.</span></h1>
-    <p class="lede" id="lede"></p>
-    <dl class="stats" id="stats"></dl>
-  </div>
-</section>
-
-<nav class="tabs wrap" id="tabs" role="tablist" aria-label="Views">
-  <button class="tab" role="tab" data-view="board" aria-selected="true">Board</button>
-  <button class="tab" role="tab" data-view="live" aria-selected="false">Tokens already trading</button>
-  <button class="tab" role="tab" data-view="method" aria-selected="false">Method</button>
-</nav>
-
-<main id="board" tabindex="-1">
-  <section class="view" id="view-board">
-    <div class="controls wrap" id="controls">
-      <label class="field grow">
-        <span>Search</span>
-        <input id="q" type="search" placeholder="protocol, ticker, category or chain" autocomplete="off">
-      </label>
-      <label class="field">
-        <span>Category</span>
-        <select id="f-category"><option value="">All categories</option></select>
-      </label>
-      <label class="field">
-        <span>Chain</span>
-        <select id="f-chain"><option value="">All chains</option></select>
-      </label>
-      <label class="field">
-        <span>Sort by</span>
-        <select id="f-sort">
-          <option value="implied">Implied value</option>
-          <option value="tvl">TVL</option>
-          <option value="growth">7-day growth</option>
-          <option value="age">Time without a token</option>
-          <option value="name">Name</option>
-        </select>
-      </label>
-      <label class="field check">
-        <input id="f-watch" type="checkbox">
-        <span>Watchlist floor only</span>
-      </label>
-      <button class="ghost" id="reset" type="button">Reset</button>
-    </div>
-
+  </header>
+  <section class="hero">
     <div class="wrap">
-      <div class="table-head" role="row">
-        <span class="c-rank">#</span>
-        <span class="c-name">Protocol</span>
-        <span class="c-num">TVL</span>
-        <span class="c-num">7d</span>
-        <span class="c-num">No token for</span>
-        <span class="c-num">Multiple</span>
-        <span class="c-num wide">Implied value</span>
+      <h1>What a protocol's token would be worth, if its record stayed as it is.</h1>
+      <p class="lede" id="lede"></p>
+      <div class="stats">
+        <dl class="stat"><dt class="stat-k">On the watchlist</dt><dd class="stat-v" id="stat-watch"></dd><dd><small class="stat-n" id="stat-watch-n"></small></dd></dl>
+        <dl class="stat"><dt class="stat-k">Rows on the board</dt><dd class="stat-v" id="stat-rows"></dd><dd><small class="stat-n" id="stat-rows-n"></small></dd></dl>
+        <dl class="stat"><dt class="stat-k">Live comparators</dt><dd class="stat-v" id="stat-live"></dd><dd><small class="stat-n" id="stat-live-n"></small></dd></dl>
+        <dl class="stat"><dt class="stat-k">Median MC / TVL</dt><dd class="stat-v" id="stat-mult"></dd><dd><small class="stat-n" id="stat-mult-n"></small></dd></dl>
       </div>
-      <ol class="rows" id="rows"></ol>
-      <p class="empty" id="empty" hidden>No protocol matches these filters.</p>
-      <p class="count" id="count"></p>
     </div>
   </section>
-
-  <section class="view" id="view-live" hidden>
-    <div class="wrap">
-      <h2>Tokens that already trade: the model's evidence</h2>
-      <p class="section-lede">Every pre-token value on the board is priced off these. The multiple is the market's own market cap over TVL for the protocols in the same category whose token already trades, so the board's number is a peer comparison, not a constant.</p>
-      <div class="table-head live-head" role="row">
-        <span class="c-name">Protocol</span>
-        <span class="c-num">TVL</span>
-        <span class="c-num">Market cap</span>
-        <span class="c-num">7d</span>
-        <span class="c-num wide">MC / TVL</span>
+  <main class="wrap">
+    <nav class="tabs" role="tablist" aria-label="Radar views">
+      <button type="button" class="tab" role="tab" data-view="board" aria-controls="view-board" aria-selected="true">Board</button>
+      <button type="button" class="tab" role="tab" data-view="live" aria-controls="view-live" aria-selected="false">Tokens already trading</button>
+      <button type="button" class="tab" role="tab" data-view="method" aria-controls="view-method" aria-selected="false">Method</button>
+    </nav>
+    <section id="view-board" class="view" aria-label="Board">
+      <div class="controls">
+        <label class="field grow"><span>Search protocols</span><input id="q" type="search" placeholder="Name, category or chain"></label>
+        <label class="field"><span>Category</span><select id="f-category"><option value="">All categories</option></select></label>
+        <label class="field"><span>Chain</span><select id="f-chain"><option value="">All chains</option></select></label>
+        <label class="field"><span>Sort by</span><select id="f-sort"><option value="implied">Implied value</option><option value="tvl">TVL</option><option value="growth">7-day growth</option><option value="age">Age</option></select></label>
+        <label class="field check"><input id="f-watch" type="checkbox"><span>Watchlist only</span></label>
+        <button id="reset" class="ghost" type="button">Reset</button>
       </div>
-      <ol class="rows live" id="live-rows"></ol>
-    </div>
-  </section>
-
-  <section class="view" id="view-method" hidden>
-    <div class="wrap method">
-      <h2>How a row's value is made</h2>
-      <p class="section-lede">One function scores every protocol. No name is special-cased: change a figure in the snapshot and the row moves with it.</p>
-      <div class="formula">
-        <div class="formula-line"><span class="k">multiple</span><span class="eq">=</span><span class="v">median(market cap ÷ TVL) of the live-token protocols in the same category</span></div>
-        <div class="formula-line"><span class="k">growth</span><span class="eq">=</span><span class="v">1 + clamp(7-day change, −60%…+120%) ÷ 100 × <b id="w-growth"></b></span></div>
-        <div class="formula-line"><span class="k">maturity</span><span class="eq">=</span><span class="v"><b id="w-matfloor"></b> + min(days listed, <b id="w-matdays"></b>) ÷ <b id="w-matdays2"></b> × <b id="w-matrange"></b></span></div>
-        <div class="formula-line"><span class="k">breadth</span><span class="eq">=</span><span class="v">1 + <b id="w-chain"></b> × min(chains − 1, <b id="w-chaincap"></b>)</span></div>
-        <div class="formula-line strong"><span class="k">implied</span><span class="eq">=</span><span class="v">TVL × multiple × growth × maturity × breadth</span></div>
-      </div>
-      <p class="note" id="method-note"></p>
-      <h3>Category multiples, read from the snapshot's own live tokens</h3>
-      <div class="table-head cat-head" role="row">
-        <span class="c-name">Category</span>
-        <span class="c-num">Live tokens</span>
-        <span class="c-num">25th pct</span>
-        <span class="c-num">Median</span>
-        <span class="c-num">75th pct</span>
-      </div>
-      <ol class="rows cats" id="cat-rows"></ol>
-      <h3>What this board does not claim</h3>
-      <ul class="limits">
-        <li>It does not predict whether or when a protocol issues a token. It prices the record as it stands.</li>
-        <li>“Records no token” is DefiLlama's record, not proof: a protocol on the board may have a token its record does not carry.</li>
-        <li>The band on each row is the interquartile range of its category's multiples, not a forecast of a price.</li>
-        <li>Nothing here is investment advice, and the implied value is this radar's own claim.</li>
-      </ul>
-    </div>
-  </section>
-</main>
-
-<aside class="drawer" id="drawer" hidden aria-live="polite">
-  <div class="drawer-in" id="drawer-in"></div>
-</aside>
-
-<footer class="foot">
-  <div class="wrap">
-    <span id="foot-left"></span>
-    <span class="dim">Built for make.fun's “Build the best token launch radar” bounty.</span>
-  </div>
-</footer>
-
-<script src="../data.js"></script>
-<script src="app.js"></script>
+      <div class="count" id="count" aria-live="polite"></div>
+      <div class="rows-head table-head" aria-hidden="true"><span>#</span><span>PROTOCOL</span><span class="c-num tvl-col">TVL</span><span class="c-num growth-col">7D</span><span class="c-num age-col">NO TOKEN FOR</span><span class="c-num mult-col">MULTIPLE</span><span class="wide">IMPLIED VALUE</span></div>
+      <ol id="rows" class="rows"></ol>
+      <div class="empty" id="empty" hidden>Nothing on the board matches that.</div>
+    </section>
+    <section id="view-live" class="view" hidden>
+      <h2>Tokens already trading</h2>
+      <p class="note section-lede">For protocols whose token already trades, the multiple is market capitalization divided by TVL (mcap_usd / tvl_usd). Each row shows TVL, market cap, multiple and age.</p>
+      <ol id="live" class="rows"></ol>
+    </section>
+    <section id="view-method" class="view method" hidden>
+      <h2>The method</h2>
+      <div id="method-body"></div>
+      <table id="category-table"></table>
+    </section>
+  </main>
+  <aside id="drawer" class="drawer" hidden aria-hidden="true" role="dialog" aria-labelledby="d-name">
+    <button id="drawer-close" class="drawer-close" type="button" aria-label="Close details">×</button>
+    <div id="d-body" class="drawer-in"></div>
+  </aside>
+  <footer class="foot"><div class="wrap"><span id="foot-line"></span></div></footer>
 </body>
 </html>
